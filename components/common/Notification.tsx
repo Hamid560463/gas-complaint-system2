@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { CheckCircleIcon, XCircleIcon, InformationCircleIcon, XMarkIcon } from '../Icons';
@@ -10,30 +11,32 @@ export const Notification: React.FC = () => {
     }
 
     const icons = {
-        success: <CheckCircleIcon className="h-6 w-6 text-green-400" />,
-        error: <XCircleIcon className="h-6 w-6 text-red-400" />,
-        info: <InformationCircleIcon className="h-6 w-6 text-blue-400" />,
+        success: <CheckCircleIcon className="h-8 w-8 text-green-500" />,
+        error: <XCircleIcon className="h-8 w-8 text-red-500" />,
+        info: <InformationCircleIcon className="h-8 w-8 text-blue-500" />,
     };
 
     return (
-        <div className="fixed bottom-0 right-0 p-4 space-y-4 z-50">
+        <div className="fixed bottom-0 right-0 p-6 space-y-4 z-50 w-full md:w-auto flex flex-col items-end">
             {notifications.map(notification => (
-                <div key={notification.id} className="max-w-sm w-full bg-white shadow-lg rounded-lg pointer-events-auto ring-1 ring-black ring-opacity-5 overflow-hidden">
-                    <div className="p-4">
+                <div key={notification.id} className="w-full md:w-[28rem] bg-white shadow-2xl rounded-xl pointer-events-auto ring-1 ring-black ring-opacity-5 overflow-hidden border border-gray-100">
+                    <div className="p-5">
                         <div className="flex items-start">
-                            <div className="flex-shrink-0">
+                            <div className="flex-shrink-0 ml-4">
                                 {icons[notification.type]}
                             </div>
-                            <div className="mr-3 w-0 flex-1 pt-0.5">
-                                <p className="text-sm font-medium text-gray-900">{notification.message}</p>
+                            <div className="w-0 flex-1 pt-1">
+                                <p className="text-base font-semibold text-gray-800 leading-relaxed">
+                                    {notification.message}
+                                </p>
                             </div>
                             <div className="mr-4 flex-shrink-0 flex">
                                 <button
                                     onClick={() => removeNotification(notification.id)}
-                                    className="bg-white rounded-md inline-flex text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                                    className="bg-white rounded-md inline-flex text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500"
                                 >
-                                    <span className="sr-only">Close</span>
-                                    <XMarkIcon className="h-5 w-5" />
+                                    <span className="sr-only">بستن</span>
+                                    <XMarkIcon className="h-6 w-6" />
                                 </button>
                             </div>
                         </div>

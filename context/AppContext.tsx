@@ -66,7 +66,7 @@ const DEFAULT_SMS_SETTINGS: SmsSettings = {
 };
 
 // Helper to create fake email for National ID based auth
-const getEmailFromNationalId = (nid: string) => `${nid}@system.local`;
+const getEmailFromNationalId = (nid: string) => `${nid}@system.com`;
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const [isLoading, setIsLoading] = useState(true);
@@ -265,9 +265,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     
     const logout = async () => {
-        await supabase.auth.signOut();
-        setUser(null);
-        addNotification('با موفقیت از حساب خود خارج شدید.');
+        try {
+            await supabase.auth.signOut();
+        } catch (e) {
+            console.error("Logout Error (Supabase):", e);
+        } finally {
+            // Always clear user state, even if network request fails
+            setUser(null);
+            addNotification('با موفقیت از حساب خود خارج شدید.');
+        }
     };
 
     const addComplaint = async (complaintData: Omit<Complaint, 'id' | 'complainant' | 'status' | 'comments' | 'referralHistory' | 'createdAt' | 'referredToSupervisor' | 'referredToExecutor'>): Promise<Complaint> => {

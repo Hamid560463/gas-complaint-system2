@@ -6,7 +6,7 @@ import { Card } from './common/Card';
 import { Input, Select, Textarea } from './common/Input';
 import { Button } from './common/Button';
 import { FileUpload } from './common/FileUpload';
-import { DocumentIcon, ClockIcon, PrinterIcon } from './Icons';
+import { DocumentIcon, ClockIcon, PrinterIcon, ArrowLeftOnRectangleIcon, CheckCircleIcon } from './Icons';
 import { validatePhoneNumber } from '../utils/validation';
 import { uploadFile } from '../utils/storageService';
 
@@ -30,41 +30,59 @@ export const getStatusBadgeStyles = (status: ComplaintStatus): string => {
 export const ComplaintForm: React.FC<ComplaintFormProps> = ({ onSuccess }) => {
     const { supervisors, executors, addComplaint, addNotification, user } = useAppContext();
     
+    // Form State
     const [gasFileNumber, setGasFileNumber] = useState('');
     const [supervisorId, setSupervisorId] = useState('');
     const [executorId, setExecutorId] = useState('');
     const [complaintType, setComplaintType] = useState<ComplaintType>(ComplaintType.AgainstExecutor);
     const [description, setDescription] = useState('');
-    
-    // New Fields
     const [contactPhoneNumber, setContactPhoneNumber] = useState(user?.phoneNumber || '');
     const [projectAddress, setProjectAddress] = useState('');
-
     const [files, setFiles] = useState<File[]>([]);
+    
+    // UI State
+    const [step, setStep] = useState<'form' | 'preview'>('form');
     const [isLoading, setIsLoading] = useState(false);
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setIsLoading(true);
+    // Helper to get names for preview
+    const selectedSupervisor = supervisors.find(s => s.id === supervisorId);
+    const selectedExecutor = executors.find(e => e.id === executorId);
 
+    const handlePreview = (e: React.FormEvent) => {
+        e.preventDefault();
+        
         // Validation - Strictly Enforced
         if (!validatePhoneNumber(contactPhoneNumber)) {
             addNotification("شماره موبایل وارد شده معتبر نیست (مثال: 09121234567).", 'error');
-            setIsLoading(false);
             return;
         }
 
         if (!projectAddress.trim()) {
             addNotification("وارد کردن آدرس دقیق ملک الزامی است.", 'error');
-            setIsLoading(false);
             return;
         }
+
+        if (!supervisorId || !executorId) {
+            addNotification("لطفا ناظر و مجری را انتخاب کنید.", 'error');
+            return;
+        }
+
+        if (!description.trim()) {
+             addNotification("متن شکواییه نمی‌تواند خالی باشد.", 'error');
+             return;
+        }
+
+        setStep('preview');
+    };
+
+    const handleFinalSubmit = async () => {
+        setIsLoading(true);
 
         const supervisor = supervisors.find(s => s.id === supervisorId);
         const executor = executors.find(e => e.id === executorId);
 
         if (!supervisor || !executor) {
-            addNotification("لطفا ناظر و مجری را انتخاب کنید.", 'error');
+            addNotification("خطا در اطلاعات ناظر یا مجری.", 'error');
             setIsLoading(false);
             return;
         }
@@ -73,7 +91,7 @@ export const ComplaintForm: React.FC<ComplaintFormProps> = ({ onSuccess }) => {
             // Upload files to Supabase Storage
             const attachments: Attachment[] = [];
             
-            // Upload sequentially or parallel
+            // Upload sequentially
             for (const file of files) {
                 const uploaded = await uploadFile(file);
                 if (uploaded) {
@@ -103,9 +121,80 @@ export const ComplaintForm: React.FC<ComplaintFormProps> = ({ onSuccess }) => {
         }
     };
 
+    if (step === 'preview') {
+        return (
+            <Card title="پیش‌نمایش و تایید نهایی">
+                <div className="space-y-4">
+                    <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
+                        <p className="text-sm text-blue-700">
+                            لطفاً اطلاعات زیر را با دقت بررسی کنید. در صورت نیاز به تغییر، دکمه <strong>"ویرایش مجدد"</strong> را بزنید. پس از ارسال نهایی، امکان تغییر توسط شما وجود نخواهد داشت.
+                        </p>
+                    </div>
+
+                    <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-6 text-sm">
+                        <div className="border-b border-gray-200 pb-2">
+                            <dt className="font-medium text-gray-500">شماره پرونده گاز</dt>
+                            <dd className="mt-1 text-gray-900">{gasFileNumber}</dd>
+                        </div>
+                        <div className="border-b border-gray-200 pb-2">
+                            <dt className="font-medium text-gray-500">شماره تماس</dt>
+                            <dd className="mt-1 text-gray-900">{contactPhoneNumber}</dd>
+                        </div>
+                        <div className="border-b border-gray-200 pb-2 md:col-span-2">
+                            <dt className="font-medium text-gray-500">آدرس پروژه</dt>
+                            <dd className="mt-1 text-gray-900">{projectAddress}</dd>
+                        </div>
+                        <div className="border-b border-gray-200 pb-2">
+                            <dt className="font-medium text-gray-500">ناظر</dt>
+                            <dd className="mt-1 text-gray-900">{selectedSupervisor?.fullName}</dd>
+                        </div>
+                        <div className="border-b border-gray-200 pb-2">
+                            <dt className="font-medium text-gray-500">مجری</dt>
+                            <dd className="mt-1 text-gray-900">{selectedExecutor?.fullName}</dd>
+                        </div>
+                        <div className="border-b border-gray-200 pb-2 md:col-span-2">
+                            <dt className="font-medium text-gray-500">نوع شکایت</dt>
+                            <dd className="mt-1 text-gray-900">{complaintType}</dd>
+                        </div>
+                        <div className="bg-gray-50 p-3 rounded-md md:col-span-2 border border-gray-200">
+                            <dt className="font-medium text-gray-500 mb-2">متن شکواییه:</dt>
+                            <dd className="text-gray-900 whitespace-pre-wrap leading-6">{description}</dd>
+                        </div>
+                        <div className="md:col-span-2">
+                            <dt className="font-medium text-gray-500 mb-2">فایل‌های ضمیمه ({files.length} مورد):</dt>
+                            {files.length > 0 ? (
+                                <ul className="list-disc list-inside text-gray-700">
+                                    {files.map((f, idx) => (
+                                        <li key={idx} className="flex items-center gap-2">
+                                            <DocumentIcon className="w-4 h-4 text-gray-400" />
+                                            {f.name} <span className="text-xs text-gray-400">({(f.size / 1024).toFixed(0)} KB)</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : (
+                                <dd className="text-gray-400 text-sm italic">هیچ فایلی انتخاب نشده است.</dd>
+                            )}
+                        </div>
+                    </dl>
+
+                    <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t border-gray-200">
+                        <Button type="button" variant="secondary" onClick={() => setStep('form')} disabled={isLoading}>
+                            <ArrowLeftOnRectangleIcon className="w-4 h-4 ml-2" />
+                            ویرایش مجدد
+                        </Button>
+                        <Button type="button" onClick={handleFinalSubmit} isLoading={isLoading}>
+                            <CheckCircleIcon className="w-4 h-4 ml-2" />
+                            تایید و ارسال نهایی
+                        </Button>
+                    </div>
+                </div>
+            </Card>
+        );
+    }
+
     return (
         <Card title="ثبت شکواییه جدید">
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handlePreview} className="space-y-4">
                 <div className="bg-yellow-50 border-r-4 border-yellow-400 p-4 mb-4">
                     <p className="text-sm text-yellow-700">
                         پر کردن شماره موبایل و آدرس دقیق ملک جهت پیگیری شکایت و دریافت پیامک‌های اطلاع‌رسانی <strong>الزامی</strong> است.
@@ -134,9 +223,31 @@ export const ComplaintForm: React.FC<ComplaintFormProps> = ({ onSuccess }) => {
                     {Object.values(ComplaintType).map(type => <option key={type} value={type}>{type}</option>)}
                 </Select>
                 <Textarea label="متن شکواییه" id="description" value={description} onChange={e => setDescription(e.target.value)} required />
-                <FileUpload onFilesChange={setFiles} />
+                
+                {/* Note: FileUpload component maintains its own state, but we sync it here via onFilesChange */}
+                {/* When returning from preview, this component will re-render. 
+                    Ideally, FileUpload should accept 'initialFiles' prop to show previously selected files.
+                    However, for security reasons, you cannot programmatically set file input values.
+                    We will modify FileUpload slightly to accept a display list if needed, 
+                    but simpler here is to rely on user re-selecting if they want to CHANGE files, 
+                    OR we just show the count.
+                    
+                    Better approach: Pass the 'files' state back into FileUpload?
+                    No, we can't set FileList on input. 
+                    We can visually show selected files in the FileUpload component if we refactor it,
+                    but the simplest way without complex refactoring is to keep the state here.
+                */}
+                <div className="border border-gray-200 rounded-md p-4">
+                    <FileUpload onFilesChange={setFiles} />
+                    {files.length > 0 && (
+                        <p className="text-xs text-green-600 mt-2 font-semibold">
+                            * {files.length} فایل انتخاب شده است (در مرحله بعد قابل بازبینی است).
+                        </p>
+                    )}
+                </div>
+
                 <div className="text-left">
-                    <Button type="submit" isLoading={isLoading}>ارسال شکواییه</Button>
+                    <Button type="submit">بررسی و ارسال</Button>
                 </div>
             </form>
         </Card>

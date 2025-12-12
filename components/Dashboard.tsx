@@ -200,8 +200,9 @@ const Sidebar: React.FC<{ view: ViewType; setView: (view: ViewType) => void; isO
                         </div>
                     </div>
                     <button
-                        onClick={logout}
-                        className="w-full mt-4 flex items-center justify-center px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100"
+                        type="button"
+                        onClick={() => logout()}
+                        className="w-full mt-4 flex items-center justify-center px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500"
                     >
                         <ArrowLeftOnRectangleIcon className="h-5 w-5 ml-2" />
                         خروج از حساب
