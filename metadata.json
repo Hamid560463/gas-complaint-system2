@@ -1,0 +1,5 @@
+{
+  "name": "Gas Engineering Complaint System",
+  "description": "A web application for submitting and managing complaints related to gas engineering projects for the Executive and Dispute Resolution Committee. Users can file complaints, which are then reviewed and resolved by administrators, supervisors, and executors.",
+  "requestFramePermissions": []
+}
