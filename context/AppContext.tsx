@@ -5,7 +5,7 @@ import { INITIAL_USERS } from '../constants';
 import { validateNationalId, validatePhoneNumber } from '../utils/validation';
 import { sendKavehNegarSms } from '../utils/smsService';
 import * as db from '../utils/db';
-
+import { supabase } from '../utils/supabaseClient';
 
 interface UpdateProfileData {
     fullName?: string;
@@ -29,10 +29,10 @@ interface AppContextType {
     notifications: NotificationState[];
     smsSettings: SmsSettings;
     isLoading: boolean;
-    isCloudConnected: boolean; // New Status Field
-    login: (nationalId: string, password: string) => boolean;
+    isCloudConnected: boolean;
+    login: (nationalId: string, password: string) => Promise<boolean>;
     register: (fullName: string, nationalId: string, password: string) => Promise<boolean>;
-    logout: () => void;
+    logout: () => Promise<void>;
     addComplaint: (complaint: Omit<Complaint, 'id' | 'complainant' | 'status' | 'comments' | 'referralHistory' | 'createdAt' | 'referredToSupervisor' | 'referredToExecutor'>) => Promise<Complaint>;
     getComplaintById: (id: string) => Complaint | undefined;
     referComplaint: (complaintId: string, target: 'supervisor' | 'executor') => Promise<void>;
@@ -59,16 +59,19 @@ const DEFAULT_TEMPLATES: SmsTemplates = {
 };
 
 const DEFAULT_SMS_SETTINGS: SmsSettings = {
-    apiKey: '47776F414B6256614A584379663045714530656C48736154763979364D3057415A376D34497074717675513D', 
+    apiKey: '', // Empty by default for security, loaded from DB
     lineNumber: '2000660110', 
     isEnabled: true,
     templates: DEFAULT_TEMPLATES
 };
 
+// Helper to create fake email for National ID based auth
+const getEmailFromNationalId = (nid: string) => `${nid}@system.local`;
+
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const [isLoading, setIsLoading] = useState(true);
     const [user, setUser] = useState<User | null>(null);
-    const [users, setUsers] = useState<User[]>([]);
+    const [users, setUsers] = useState<User[]>([]); // This stores public profiles
     const [complaints, setComplaints] = useState<Complaint[]>([]);
     const [smsSettings, setSmsSettings] = useState<SmsSettings>(DEFAULT_SMS_SETTINGS);
     const [notifications, setNotifications] = useState<NotificationState[]>([]);
@@ -82,18 +85,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 // Check connection type
                 setIsCloudConnected(db.isCloudStorage());
 
-                // Load Users
+                // Check Supabase Session
+                const { data: { session } } = await supabase.auth.getSession();
+                
+                // Load Users (Public Profiles)
                 let loadedUsers = await db.fetchCollection<User>('users');
                 if (loadedUsers.length === 0) {
-                    // Seed initial users if DB is empty
-                    loadedUsers = INITIAL_USERS;
-                    await db.saveCollection('users', loadedUsers);
+                    // Seed initial users if DB is empty AND we are on local storage (avoid auto-seeding auth on cloud)
+                    if (!db.isCloudStorage()) {
+                        loadedUsers = INITIAL_USERS;
+                        await db.saveCollection('users', loadedUsers);
+                    }
                 }
                 setUsers(loadedUsers);
 
+                if (session && session.user) {
+                    // Find the profile matching the auth user
+                    // We store the National ID in user_metadata or map it via the 'users' table
+                    // Here we try to find the user in our 'users' collection by ID (which we used as National ID)
+                    // But Supabase Auth uses UUIDs. 
+                    // Strategy: We look up the user in 'users' collection where id == nationalId derived from email OR metadata.
+                    const nationalId = session.user.user_metadata?.nationalId || session.user.email?.split('@')[0];
+                    const currentUser = loadedUsers.find(u => u.id === nationalId);
+                    if (currentUser) {
+                        setUser(currentUser);
+                    }
+                }
+
                 // Load Complaints
                 const loadedComplaints = await db.fetchCollection<any>('complaints');
-                // Revive dates
                 const processedComplaints = loadedComplaints.map((c: any) => ({
                     ...c,
                     createdAt: new Date(c.createdAt),
@@ -113,7 +133,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
                 // Load Settings
                 const loadedSettings = await db.fetchSettings(DEFAULT_SMS_SETTINGS);
-                // Ensure templates exist
                 const finalSettings = {
                     ...loadedSettings,
                     templates: { ...DEFAULT_TEMPLATES, ...(loadedSettings.templates || {}) }
@@ -122,13 +141,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
             } catch (error) {
                 console.error("Failed to load data:", error);
-                addNotification('خطا در بارگذاری اطلاعات از پایگاه داده.', 'error');
+                addNotification('خطا در بارگذاری اطلاعات.', 'error');
             } finally {
                 setIsLoading(false);
             }
         };
 
         loadData();
+
+        // Listen for auth changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+            if (!session) {
+                setUser(null);
+            } else {
+                 const loadedUsers = await db.fetchCollection<User>('users');
+                 setUsers(loadedUsers);
+                 const nationalId = session.user.user_metadata?.nationalId || session.user.email?.split('@')[0];
+                 const currentUser = loadedUsers.find(u => u.id === nationalId);
+                 if (currentUser) setUser(currentUser);
+            }
+        });
+
+        return () => subscription.unsubscribe();
     }, []);
 
     const addNotification = (message: string, type: NotificationType = 'info') => {
@@ -158,12 +192,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const handleSendSms = async (recipient: string, message: string) => {
         if (!smsSettings.isEnabled) return false;
         
-        if (!smsSettings.apiKey || !smsSettings.lineNumber) {
-            console.warn('[SMS] Cannot send SMS: API Key or Line Number missing.');
+        if (!smsSettings.apiKey) {
+            console.warn('[SMS] API Key missing.');
             return false;
         }
         
-        // Use the service
         const result = await sendKavehNegarSms(smsSettings.apiKey, smsSettings.lineNumber, recipient, message);
         
         if (!result.success) {
@@ -173,15 +206,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return result.success;
     };
 
-    const login = (nationalId: string, password: string): boolean => {
-        const foundUser = users.find(u => u.id === nationalId && u.password === password);
-        if (foundUser) {
-            setUser(foundUser);
-            addNotification(`خوش آمدید, ${foundUser.fullName}!`, 'success');
-            return true;
+    const login = async (nationalId: string, password: string): Promise<boolean> => {
+        // Use Supabase Auth
+        const email = getEmailFromNationalId(nationalId);
+        const { error } = await supabase.auth.signInWithPassword({
+            email,
+            password
+        });
+
+        if (error) {
+            console.error("Login error:", error.message);
+            addNotification('کد ملی یا رمز عبور اشتباه است.', 'error');
+            return false;
         }
-        addNotification('کد ملی یا رمز عبور اشتباه است.', 'error');
-        return false;
+
+        addNotification(`خوش آمدید!`, 'success');
+        return true;
     };
 
     const register = async (fullName: string, nationalId: string, password: string): Promise<boolean> => {
@@ -189,25 +229,43 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             addNotification('کد ملی وارد شده معتبر نیست.', 'error');
             return false;
         }
-        if (users.some(u => u.id === nationalId)) {
-            addNotification('کاربری با این کد ملی قبلاً ثبت نام کرده است.', 'error');
+
+        const email = getEmailFromNationalId(nationalId);
+
+        // 1. Sign up in Supabase Auth
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+                data: { nationalId, fullName, role: Role.Complainant } // Metadata
+            }
+        });
+
+        if (authError) {
+            addNotification(`خطا در ثبت نام: ${authError.message}`, 'error');
             return false;
         }
-        const newUser: User = { id: nationalId, fullName, password, role: Role.Complainant };
+
+        // 2. Create Public Profile in 'users' table
+        const newUser: User = { 
+            id: nationalId, 
+            fullName, 
+            role: Role.Complainant 
+            // We don't store password in the public table anymore
+        };
         
-        // Optimistic UI update
         const updatedUsers = [...users, newUser];
         setUsers(updatedUsers);
-        setUser(newUser);
+        setUser(newUser); // Set immediate context state
         
-        // DB Persist
         await db.saveItem('users', newUser);
         
         addNotification('ثبت نام با موفقیت انجام شد.', 'success');
         return true;
     };
     
-    const logout = () => {
+    const logout = async () => {
+        await supabase.auth.signOut();
         setUser(null);
         addNotification('با موفقیت از حساب خود خارج شدید.');
     };
@@ -229,10 +287,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const updatedComplaints = [...complaints, newComplaint];
         setComplaints(updatedComplaints);
         
-        // DB Persist
         await db.saveItem('complaints', newComplaint);
         
-        // SMS Notification
         if (newComplaint.contactPhoneNumber) {
             const message = formatSmsMessage(smsSettings.templates.newComplaint, {
                 id: newComplaint.id
@@ -289,12 +345,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         setComplaints(updatedComplaints);
 
-        // DB Persist
         if (targetComplaint) {
             await db.saveItem('complaints', targetComplaint);
         }
 
-        // SMS
         if (targetUser?.phoneNumber) {
             const message = formatSmsMessage(smsSettings.templates.referralToEngineer, {
                 id: complaintId
@@ -417,13 +471,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const updateUserProfile = async (data: UpdateProfileData) => {
         if (!user) return;
 
+        // 1. Update Auth Password if provided
+        if (data.password) {
+            const { error } = await supabase.auth.updateUser({ password: data.password });
+            if (error) {
+                addNotification(`خطا در تغییر رمز عبور: ${error.message}`, 'error');
+                return;
+            }
+        }
+
+        // 2. Update Public Profile
         let updatedUserObj: User | null = null;
 
         const updatedUsers = users.map(u => {
             if (u.id === user.id) {
                 const updated = { ...u };
                 if (data.fullName) updated.fullName = data.fullName;
-                if (data.password) updated.password = data.password;
+                // We don't store password in public profile
                 if (data.avatar !== undefined) updated.avatar = data.avatar ?? undefined;
                 updatedUserObj = updated;
                 return updated;
@@ -439,6 +503,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     const updateEngineer = async (userId: string, data: UpdateEngineerData): Promise<boolean> => {
+        // Only updates the Public Profile.
+        // For security, an admin cannot change another user's password directly via Supabase Auth client-side without a backend function, 
+        // unless using Service Role key (which we shouldn't use in frontend).
+        // So we just update the profile info.
+
         if (data.phoneNumber && !validatePhoneNumber(data.phoneNumber)) {
             addNotification('فرمت شماره تلفن همراه نامعتبر است. (مثال صحیح: 09123456789)', 'error');
             return false;
@@ -472,45 +541,61 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             addNotification('کاربری با این کد ملی قبلاً وجود دارد.', 'error');
             return false;
         }
-        if (engineer.phoneNumber && !validatePhoneNumber(engineer.phoneNumber)) {
-             addNotification('فرمت شماره تلفن همراه نامعتبر است.', 'error');
+
+        const email = getEmailFromNationalId(engineer.id);
+        const password = engineer.password || '123'; // Default
+
+        // 1. Create Auth User
+        const { error: authError } = await supabase.auth.signUp({
+            email,
+            password,
+            options: { data: { nationalId: engineer.id, fullName: engineer.fullName, role: engineer.role } }
+        });
+
+        if (authError) {
+             addNotification(`خطا در ایجاد حساب کاربری: ${authError.message}`, 'error');
              return false;
         }
 
-        const updatedUsers = [...users, engineer];
+        // 2. Create Public Profile
+        const safeEngineer = { ...engineer };
+        delete safeEngineer.password; // Don't save pass in public
+
+        const updatedUsers = [...users, safeEngineer];
         setUsers(updatedUsers);
-        await db.saveItem('users', engineer);
+        await db.saveItem('users', safeEngineer);
 
         addNotification('مهندس جدید با موفقیت اضافه شد.', 'success');
         return true;
     };
 
     const importEngineers = async (engineers: User[]): Promise<boolean> => {
-        const invalidIdIndex = engineers.findIndex(e => !validateNationalId(e.id));
-        if (invalidIdIndex !== -1) {
-            addNotification(`کد ملی نامعتبر در ردیف ${invalidIdIndex + 2} فایل اکسل: ${engineers[invalidIdIndex].id}`, 'error');
-            return false;
-        }
-
-        // We append new engineers to existing users that are NOT being imported (keep admins/complainants)
-        // Or we assume the import is ONLY for supervisors/executors.
-        // For simplicity, we merge.
+        // Bulk import is tricky with Auth because of rate limits and security.
+        // For this demo, we will just create Public Profiles in the 'users' table.
+        // In a real app, each engineer would need to sign up themselves or use a backend Admin script.
         
         const existingNonEngineers = users.filter(u => u.role === Role.Complainant || u.role === Role.Admin);
-        const finalUsers = [...existingNonEngineers, ...engineers];
+        
+        // Filter out those who already exist in the list
+        const newUniqueEngineers = engineers.filter(e => !users.some(u => u.id === e.id));
+        
+        // Remove passwords before saving to public table
+        const safeEngineers = newUniqueEngineers.map(e => {
+            const { password, ...rest } = e;
+            return rest as User;
+        });
+
+        const finalUsers = [...users, ...safeEngineers];
 
         setUsers(finalUsers);
-        
-        // Bulk Save
         await db.saveCollection('users', finalUsers);
 
-        addNotification('لیست مهندسین با موفقیت به‌روزرسانی شد.', 'success');
+        addNotification(`لیست مهندسین به‌روز شد. (تعداد افزوده شده: ${safeEngineers.length}). توجه: حساب کاربری ورود (Auth) باید جداگانه ایجاد شود.`, 'success');
         return true;
     };
 
     const getDynamicSupervisors = () => users.filter(u => u.role === Role.Supervisor);
     const getDynamicExecutors = () => users.filter(u => u.role === Role.Executor);
-
 
     const value = {
         user,

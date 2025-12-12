@@ -8,20 +8,11 @@ import { Button } from './common/Button';
 import { FileUpload } from './common/FileUpload';
 import { DocumentIcon, ClockIcon, PrinterIcon } from './Icons';
 import { validatePhoneNumber } from '../utils/validation';
+import { uploadFile } from '../utils/storageService';
 
 interface ComplaintFormProps {
     onSuccess: (complaintId: string) => void;
 }
-
-// Helper to convert File to Base64 Data URL
-const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = error => reject(error);
-    });
-};
 
 // Helper for status colors
 export const getStatusBadgeStyles = (status: ComplaintStatus): string => {
@@ -79,12 +70,18 @@ export const ComplaintForm: React.FC<ComplaintFormProps> = ({ onSuccess }) => {
         }
 
         try {
-            // Convert files to Base64 to make them accessible across devices
-            const attachments: Attachment[] = await Promise.all(files.map(async (file) => ({
-                id: file.name,
-                name: file.name,
-                url: await fileToBase64(file),
-            })));
+            // Upload files to Supabase Storage
+            const attachments: Attachment[] = [];
+            
+            // Upload sequentially or parallel
+            for (const file of files) {
+                const uploaded = await uploadFile(file);
+                if (uploaded) {
+                    attachments.push(uploaded);
+                } else {
+                    addNotification(`خطا در آپلود فایل ${file.name}`, 'error');
+                }
+            }
 
             const newComplaint = await addComplaint({
                 gasFileNumber,
@@ -100,7 +97,7 @@ export const ComplaintForm: React.FC<ComplaintFormProps> = ({ onSuccess }) => {
             onSuccess(newComplaint.id);
         } catch (error) {
             console.error(error);
-            addNotification("خطا در بارگذاری فایل‌ها یا ثبت شکایت.", 'error');
+            addNotification("خطا در ثبت شکایت.", 'error');
         } finally {
             setIsLoading(false);
         }
@@ -173,7 +170,7 @@ const AttachmentsList: React.FC<{ attachments: Attachment[] }> = ({ attachments 
 );
 
 const ResponseForm: React.FC<{ complaintId: string, title: string, buttonText: string }> = ({ complaintId, title, buttonText }) => {
-    const { addComment } = useAppContext();
+    const { addComment, addNotification } = useAppContext();
     const [text, setText] = useState('');
     const [files, setFiles] = useState<File[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -183,11 +180,15 @@ const ResponseForm: React.FC<{ complaintId: string, title: string, buttonText: s
         setIsLoading(true);
         
         try {
-            const attachments: Attachment[] = await Promise.all(files.map(async (file) => ({
-                id: file.name,
-                name: file.name,
-                url: await fileToBase64(file),
-            })));
+            const attachments: Attachment[] = [];
+            for (const file of files) {
+                const uploaded = await uploadFile(file);
+                if (uploaded) {
+                    attachments.push(uploaded);
+                } else {
+                     addNotification(`خطا در آپلود فایل ${file.name}`, 'error');
+                }
+            }
 
             await addComment(complaintId, text, attachments);
             setText('');
@@ -218,10 +219,10 @@ const AdminReturnForm: React.FC<{ complaint: Complaint }> = ({ complaint }) => {
     const [targetRole, setTargetRole] = useState<Role>(Role.Complainant);
     const [isLoading, setIsLoading] = useState(false);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsLoading(true);
-        returnComplaint(complaint.id, reason, targetRole);
+        await returnComplaint(complaint.id, reason, targetRole);
         setReason('');
         setIsLoading(false);
     };
@@ -251,10 +252,10 @@ const AdminVerdictForm: React.FC<{ complaintId: string }> = ({ complaintId }) =>
     const [verdict, setVerdict] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsLoading(true);
-        addFinalVerdict(complaintId, verdict);
+        await addFinalVerdict(complaintId, verdict);
         setIsLoading(false);
     };
     
@@ -281,8 +282,6 @@ export const ComplaintDetails: React.FC<{ complaint: Complaint }> = ({ complaint
     const isExecutor = user.role === Role.Executor;
 
     // Filter Comments Logic:
-    // Admin sees ALL comments.
-    // Others see only THEIR OWN comments AND comments made by Admin (instructions).
     const visibleComments = complaint.comments.filter(comment => {
         if (isAdmin) return true;
         if (comment.author.role === Role.Admin) return true;
@@ -293,23 +292,18 @@ export const ComplaintDetails: React.FC<{ complaint: Complaint }> = ({ complaint
     const isInvestigation = complaint.status === ComplaintStatus.Investigation;
 
     // Response Form Logic
-    // 1. Engineers can respond if status is Referred or Responded.
-    // 2. If status is Investigation, ONLY the target can respond.
-    
     let canRespond = false;
     let responseTitle = "ثبت توضیحات";
     let isDefectMode = false;
 
     if (!isClosed) {
         if (isInvestigation) {
-            // Only the person targeted by the investigation can respond
             if (complaint.investigationTarget === user.role) {
                 canRespond = true;
                 responseTitle = "تکمیل مدارک / رفع نقص";
                 isDefectMode = true;
             }
         } else if (complaint.status !== ComplaintStatus.New) {
-            // Standard flow: Engineers can respond if referred
             if (isSupervisor && complaint.referredToSupervisor) canRespond = true;
             if (isExecutor && complaint.referredToExecutor) canRespond = true;
         }
@@ -357,7 +351,6 @@ export const ComplaintDetails: React.FC<{ complaint: Complaint }> = ({ complaint
                     <DetailItem label="مستندات شاکی" value={complaint.attachments.length > 0 ? <AttachmentsList attachments={complaint.attachments} /> : "مستنداتی ضمیمه نشده است."} />
                 </dl>
                 
-                {/* Referral History Log */}
                 {complaint.referralHistory && complaint.referralHistory.length > 0 && (
                     <div className="mt-6 border-t border-gray-200 pt-6">
                         <h4 className="text-sm font-semibold text-gray-900 mb-4 flex items-center">
@@ -431,7 +424,6 @@ export const ComplaintDetails: React.FC<{ complaint: Complaint }> = ({ complaint
                     </div>
                 </div>
                 
-                {/* Response Form */}
                 {canRespond && (
                     <div className="mt-4 print:hidden">
                         {isDefectMode && (

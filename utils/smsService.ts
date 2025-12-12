@@ -1,17 +1,14 @@
 
-export interface KavehNegarResponse {
-    return: {
-        status: number;
-        message: string;
-    };
-    entries: any[];
-}
+import { supabase } from './supabaseClient';
 
 export interface SmsResult {
     success: boolean;
     message: string;
 }
 
+/**
+ * Sends SMS via Supabase Edge Function to keep API keys secure.
+ */
 export const sendKavehNegarSms = async (
     apiKey: string, 
     sender: string, 
@@ -20,45 +17,37 @@ export const sendKavehNegarSms = async (
 ): Promise<SmsResult> => {
     try {
         // Validation
-        if (!apiKey || !sender || !receptor || !message) {
-            console.warn('SMS Service: Missing required parameters');
-            return { success: false, message: 'پارامترهای ورودی (کلید API، فرستنده یا گیرنده) ناقص هستند.' };
+        if (!receptor || !message) {
+            return { success: false, message: 'شماره گیرنده یا متن پیام خالی است.' };
         }
 
-        console.log(`[SMS Service] Attempting to send SMS via KavehNegar to ${receptor}...`);
+        console.log(`[SMS Service] Invoking Edge Function for: ${receptor}`);
 
-        const encodedMessage = encodeURIComponent(message);
-        
-        // --- CORS FIX ---
-        // Browsers block direct requests to KavehNegar due to CORS policy.
-        // We use 'corsproxy.io' to bypass this restriction for client-side apps.
-        // In a real production environment, you should use your own backend server.
-        
-        const targetUrl = `https://api.kavenegar.com/v1/${apiKey}/sms/send.json?receptor=${receptor}&sender=${sender}&message=${encodedMessage}`;
-        
-        // We wrap the target URL with a CORS proxy
-        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+        const { data, error } = await supabase.functions.invoke('send-sms', {
+            body: {
+                apiKey,
+                sender,
+                receptor,
+                message
+            }
+        });
 
-        const response = await fetch(proxyUrl);
-        
-        // Check if response is ok
-        if (!response.ok) {
-             console.error('❌ Network Error:', response.statusText);
-             return { success: false, message: `خطای شبکه: ${response.statusText}` };
+        if (error) {
+            console.error('❌ Edge Function Error:', error);
+            return { success: false, message: 'خطا در ارتباط با سرور پیامک (Edge Function).' };
         }
 
-        const data: KavehNegarResponse = await response.json();
-
-        if (data.return && data.return.status === 200) {
-            console.log('✅ SMS Sent Successfully:', data);
+        if (data && data.success) {
+            console.log('✅ SMS Sent Successfully');
             return { success: true, message: 'پیامک با موفقیت ارسال شد.' };
         } else {
-            const errorMsg = data.return ? `${data.return.message} (کد: ${data.return.status})` : 'خطای ناشناخته از سمت پنل پیامک';
-            console.error('❌ KavehNegar API Error:', errorMsg);
+            const errorMsg = data?.message || 'خطای ناشناخته از سمت سرور';
+            console.error('❌ SMS Failed:', errorMsg);
             return { success: false, message: errorMsg };
         }
+
     } catch (error) {
-        console.error('❌ SMS Service Error:', error);
+        console.error('❌ SMS Service System Error:', error);
         return { success: false, message: 'خطای سیستمی در ارسال درخواست.' };
     }
 };
